@@ -1,0 +1,911 @@
+{
+  "name": "Solar_Company_1",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "id": "aea90607-09c2-4f1b-b768-18c22faa9a64",
+      "name": "Every Day 9AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -1664,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT c.* FROM clients c WHERE c.status = 'active' AND c.id NOT IN (SELECT client_id FROM interactions WHERE created_at > NOW() - INTERVAL '3 days' AND client_id IS NOT NULL)",
+        "options": {}
+      },
+      "id": "774f5a97-8899-4f90-b22b-1f74f70ed96c",
+      "name": "Get Stale Clients",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -1440,
+        496
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "OIp6VsKaSTd3u8af",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $(\"Loop Over Clients\").item.json.email }}",
+        "subject": "WE MISS YOU",
+        "message": "=<p>Hi {{ $(\"Loop Over Clients\").item.json.name }},</p><p>We noticed you haven't heard from us in a while. We'd love to help you take the next step toward switching to solar and lowering your energy bills.</p><p>If you have any questions or would like an updated quote or a consultation, just reply to this email — we're happy to help.</p><p>Warm regards,<br/>Our Team</p>",
+        "options": {}
+      },
+      "id": "263a62fe-e5ce-4978-beeb-9d9c2266b6c8",
+      "name": "Send Follow-up",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "webhookId": "195a7321-53c6-4af1-ac35-e71c61b496c7",
+      "position": [
+        -992,
+        352
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "0chDoZ05RYbbKW2l",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO interactions (client_id, type, details) VALUES ($1, 'follow_up', $2::jsonb)",
+        "options": {
+          "queryReplacement": "={{ $(\"Loop Over Clients\").item.json.id }},{{ JSON.stringify({ channel: \"email\", sent_at: $now.toISO() }) }}"
+        }
+      },
+      "id": "a7e2ceb8-6506-4fd7-b1e8-230675b1338a",
+      "name": "Log Follow-up",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -768,
+        352
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "OIp6VsKaSTd3u8af",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT count(*)::int AS cnt FROM interactions WHERE client_id = $1 AND type = 'follow_up'",
+        "options": {
+          "queryReplacement": "={{ $(\"Loop Over Clients\").item.json.id }}"
+        }
+      },
+      "id": "39745439-4326-43b4-8d50-d322524f89ab",
+      "name": "Count Follow-ups",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -544,
+        352
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "OIp6VsKaSTd3u8af",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "threshold",
+              "leftValue": "={{ $json.cnt }}",
+              "rightValue": 3,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d6e4a2eb-2ba0-4175-94d0-b1646be6b797",
+      "name": "Reached 3 Follow-ups?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -320,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE clients SET status = 'inactive' WHERE id = $1",
+        "options": {
+          "queryReplacement": "={{ $(\"Loop Over Clients\").item.json.id }}"
+        }
+      },
+      "id": "403ab721-96b7-428b-8c1a-7a471a8dbdab",
+      "name": "Deactivate Client",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -96,
+        432
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "OIp6VsKaSTd3u8af",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "d3c48c33-ea03-4055-a3db-22c2a03b0c77",
+      "name": "Loop Over Clients",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -1216,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "path": "dashboard-data",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "89d1a8d2-d077-4f76-86f8-04708eb68af4",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "webhookId": "ac9d1158-8d3e-4bb1-b2c5-e783028f49fa",
+      "position": [
+        -1664,
+        720
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT count(*)::int AS total_clients FROM clients",
+        "options": {}
+      },
+      "id": "c924b605-4631-4f67-9f0c-a82bd7b59c5a",
+      "name": "Total Clients",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -1440,
+        720
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "OIp6VsKaSTd3u8af",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT count(*)::int AS meetings_this_week FROM meetings WHERE date >= date_trunc('week', now())",
+        "options": {}
+      },
+      "id": "9954b77e-1e96-48b2-bc61-37345a9f3c87",
+      "name": "Meetings This Week",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -1216,
+        720
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "OIp6VsKaSTd3u8af",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT count(*)::int AS total_quotes FROM quotes",
+        "options": {}
+      },
+      "id": "74be880c-ff7b-43a8-ac01-dc915f2a0052",
+      "name": "Total Quotes",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -992,
+        720
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "OIp6VsKaSTd3u8af",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT status, count(*)::int AS count FROM clients GROUP BY status",
+        "options": {}
+      },
+      "id": "c59edd21-7ee4-4231-a5aa-c078fab6b3b7",
+      "name": "Clients By Status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -768,
+        720
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "OIp6VsKaSTd3u8af",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const totalClients = $('Total Clients').first().json.total_clients ?? 0;\nconst meetingsThisWeek = $('Meetings This Week').first().json.meetings_this_week ?? 0;\nconst totalQuotes = $('Total Quotes').first().json.total_quotes ?? 0;\nconst by_status = $('Clients By Status').all().map(i => ({ status: i.json.status, count: i.json.count }));\n\nreturn [{\n  json: {\n    total_clients: totalClients,\n    meetings_this_week: meetingsThisWeek,\n    total_quotes: totalQuotes,\n    by_status,\n  },\n}];"
+      },
+      "id": "b9aa5935-f22a-4d2b-bd18-c665555645e7",
+      "name": "Combine Metrics",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -544,
+        720
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "91b4bbe3-d151-4a47-9856-6f29303bc9f4",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -320,
+        720
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH existing AS (SELECT id FROM clients WHERE email = $1 LIMIT 1), inserted AS (INSERT INTO clients (name, email, phone, source) SELECT $2, $1, $3, 'contact_form' WHERE NOT EXISTS (SELECT 1 FROM existing) RETURNING id) SELECT id FROM inserted UNION ALL SELECT id FROM existing LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ $json.body.email }},{{ $json.body.name }},{{ $json.body.phone }}"
+        }
+      },
+      "id": "458db06c-e3a6-4eef-8250-79f855ac5122",
+      "name": "Upsert Client",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -1440,
+        944
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "OIp6VsKaSTd3u8af",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO meetings (client_id, date, time, status, notes) VALUES ($1, $2, $3, 'scheduled', $4) RETURNING id",
+        "options": {
+          "queryReplacement": "=={{ [ $json.id, $(\"Webhook1\").item.json.body.date, $(\"Webhook1\").item.json.body.time, $(\"Webhook1\").item.json.body.notes ] }}"
+        }
+      },
+      "id": "8d156f42-2509-47d4-9112-db33a4a23944",
+      "name": "Insert Meeting",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -1216,
+        944
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "OIp6VsKaSTd3u8af",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO interactions (client_id, type, details) VALUES ($1, 'meeting_booked', $2::jsonb)",
+        "options": {
+          "queryReplacement": "={{ $(\"Upsert Client\").item.json.id }},{{ JSON.stringify({ date: $(\"Webhook1\").item.json.body.date, time: $(\"Webhook1\").item.json.body.time, notes: $(\"Webhook1\").item.json.body.notes, meeting_id: $json.id }) }}"
+        }
+      },
+      "id": "9e0bf87d-b36f-45aa-9770-5b6f2201596f",
+      "name": "Insert Interaction",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -992,
+        944
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "OIp6VsKaSTd3u8af",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $(\"Webhook1\").item.json.body.email }}",
+        "subject": "CONFIRMED CONSULTATION",
+        "message": "=<p>Hi {{ $(\"Webhook1\").item.json.body.name }},</p><p>Your consultation is confirmed for {{ $(\"Webhook1\").item.json.body.date }} at {{ $(\"Webhook1\").item.json.body.time }}.</p><p>We look forward to speaking with you. If you need to reschedule, just reply to this email.</p><p>Warm regards,<br/>Our Team</p>",
+        "options": {}
+      },
+      "id": "0b06e5cd-920a-49b7-80b0-05db25acd919",
+      "name": "Email Client",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "webhookId": "1dbcf798-7081-4e84-8067-3cec86b15e1c",
+      "position": [
+        -768,
+        944
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "0chDoZ05RYbbKW2l",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "admin1@gmail.com",
+        "subject": "=New Meeting Booked: {{ $(\"Webhook1\").item.json.body.name }}",
+        "message": "=<p>A new consultation has been scheduled:</p><ul><li>Name: {{ $(\"Webhook1\").item.json.body.name }}</li><li>Email: {{ $(\"Webhook1\").item.json.body.email }}</li><li>Phone: {{ $(\"Webhook1\").item.json.body.phone }}</li><li>Date: {{ $(\"Webhook1\").item.json.body.date }}</li><li>Time: {{ $(\"Webhook1\").item.json.body.time }}</li><li>Notes: {{ $(\"Webhook1\").item.json.body.notes }}</li><li>Meeting ID: {{ $(\"Insert Meeting\").item.json.id }}</li></ul>",
+        "options": {}
+      },
+      "id": "e686301b-b21a-4f27-ad32-b201c4d930f8",
+      "name": "Email Admin",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "webhookId": "cc2191cc-860d-43ee-a4b9-e43c2d0b378c",
+      "position": [
+        -544,
+        944
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "0chDoZ05RYbbKW2l",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "meeting-booking",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "09ddd0bd-5590-4c3b-b3d3-e8de70871e53",
+      "name": "Webhook1",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "webhookId": "eeae7176-f9b4-4b88-9cf7-1af03fdfb59e",
+      "position": [
+        -1664,
+        944
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, meeting_id: $(\"Insert Meeting\").item.json.id, message: \"Meeting scheduled\" }) }}",
+        "options": {}
+      },
+      "id": "e00f2895-a5eb-4c8c-a535-b25f026355f2",
+      "name": "Respond1",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -320,
+        944
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const b = $json.body || {};\nconst monthly_bill = Number(b.monthly_bill) || 0;\nconst usage_kwh = Number(b.usage_kwh) || 0;\nconst roof_area = b.roof_area != null ? Number(b.roof_area) : null;\n\nconst system_size_kw = usage_kwh / (30 * 4.5);\nconst num_panels = Math.ceil(system_size_kw / 0.55);\nconst estimated_cost = system_size_kw * 170000;\nconst monthly_savings = monthly_bill * 0.85;\nconst payback_years = monthly_savings > 0 ? estimated_cost / (monthly_savings * 12) : 0;\n\nreturn {\n  name: b.name,\n  email: b.email,\n  phone: b.phone,\n  city: b.city,\n  monthly_bill,\n  usage_kwh,\n  roof_area,\n  system_size_kw: Math.round(system_size_kw * 100) / 100,\n  num_panels,\n  estimated_cost: Math.round(estimated_cost),\n  monthly_savings: Math.round(monthly_savings * 100) / 100,\n  payback_years: Math.round(payback_years * 100) / 100,\n};"
+      },
+      "id": "99a80219-922f-4c21-ad5d-e73687742b49",
+      "name": "Calculate Quote",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1440,
+        1168
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO quotes (client_id, monthly_bill, system_size_kw, num_panels, estimated_cost, monthly_savings, payback_years) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        "options": {
+          "queryReplacement": "={{ $json.id }},{{ $(\"Calculate Quote\").item.json.monthly_bill }},{{ $(\"Calculate Quote\").item.json.system_size_kw }},{{ $(\"Calculate Quote\").item.json.num_panels }},{{ $(\"Calculate Quote\").item.json.estimated_cost }},{{ $(\"Calculate Quote\").item.json.monthly_savings }},{{ $(\"Calculate Quote\").item.json.payback_years }}"
+        }
+      },
+      "id": "1d6d78bb-2860-4192-a42c-32c0d444c5d0",
+      "name": "Insert Quote",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -992,
+        1168
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "OIp6VsKaSTd3u8af",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $(\"Calculate Quote\").item.json.email }}",
+        "subject": "Your Solar Quote",
+        "message": "=<h2>Your Personalized Solar Quote</h2><p>Hi {{ $(\"Calculate Quote\").item.json.name }},</p><p>Thank you for your interest in going solar with us. Based on the information you provided, here is your estimate:</p><table cellpadding=\"8\" style=\"border-collapse:collapse;\"><tr><td><strong>Recommended System Size</strong></td><td>{{ $(\"Calculate Quote\").item.json.system_size_kw }} kW</td></tr><tr><td><strong>Number of Panels</strong></td><td>{{ $(\"Calculate Quote\").item.json.num_panels }}</td></tr><tr><td><strong>Estimated Cost</strong></td><td>PKR {{ $(\"Calculate Quote\").item.json.estimated_cost }}</td></tr><tr><td><strong>Estimated Monthly Savings</strong></td><td>PKR {{ $(\"Calculate Quote\").item.json.monthly_savings }}</td></tr><tr><td><strong>Estimated Payback Period</strong></td><td>{{ $(\"Calculate Quote\").item.json.payback_years }} years</td></tr></table><p>Our team will reach out to discuss the next steps. Feel free to reply to this email with any questions.</p><p>Warm regards,<br/>Our Team</p>",
+        "options": {}
+      },
+      "id": "3987f886-9cbc-41c2-9456-bad7286935c0",
+      "name": "Email Quote",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "webhookId": "f4ba8ec2-6cba-4d8e-8646-b25de40eff27",
+      "position": [
+        -544,
+        1168
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "0chDoZ05RYbbKW2l",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "quote-generation",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "cd0ad6c1-3d0d-4dc0-a806-ca8d0370ca5b",
+      "name": "Webhook2",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "webhookId": "29aa31fa-000c-4852-aa14-0b4b316ca82e",
+      "position": [
+        -1664,
+        1168
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH existing AS (SELECT id FROM clients WHERE email = $1 LIMIT 1), inserted AS (INSERT INTO clients (name, email, phone, source) SELECT $2, $1, $3, 'contact_form' WHERE NOT EXISTS (SELECT 1 FROM existing) RETURNING id) SELECT id FROM inserted UNION ALL SELECT id FROM existing LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ $json.email }},{{ $json.name }},{{ $json.phone }}"
+        }
+      },
+      "id": "469627c4-efa9-4266-af39-bd30be01d9f5",
+      "name": "Upsert Client1",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -1216,
+        1168
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "OIp6VsKaSTd3u8af",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO interactions (client_id, type, details) VALUES ($1, 'quote_generated', $2::jsonb)",
+        "options": {
+          "queryReplacement": "={{ $(\"Upsert Client1\").item.json.id }},{{ JSON.stringify($(\"Calculate Quote\").item.json) }}"
+        }
+      },
+      "id": "23c72a75-32c0-456f-81c8-0b6ec52eee52",
+      "name": "Insert Interaction1",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -768,
+        1168
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "OIp6VsKaSTd3u8af",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, quote: { system_size_kw: $(\"Calculate Quote\").item.json.system_size_kw, num_panels: $(\"Calculate Quote\").item.json.num_panels, estimated_cost: $(\"Calculate Quote\").item.json.estimated_cost, monthly_savings: $(\"Calculate Quote\").item.json.monthly_savings, payback_years: $(\"Calculate Quote\").item.json.payback_years } }) }}",
+        "options": {}
+      },
+      "id": "5f1b4546-72f6-4850-b6b1-7715e2307d12",
+      "name": "Respond2",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -320,
+        1168
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Every Day 9AM": {
+      "main": [
+        [
+          {
+            "node": "Get Stale Clients",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Stale Clients": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Clients",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Follow-up": {
+      "main": [
+        [
+          {
+            "node": "Log Follow-up",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Follow-up": {
+      "main": [
+        [
+          {
+            "node": "Count Follow-ups",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Count Follow-ups": {
+      "main": [
+        [
+          {
+            "node": "Reached 3 Follow-ups?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reached 3 Follow-ups?": {
+      "main": [
+        [
+          {
+            "node": "Deactivate Client",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Clients",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deactivate Client": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Clients",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Clients": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Send Follow-up",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Total Clients",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Total Clients": {
+      "main": [
+        [
+          {
+            "node": "Meetings This Week",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Meetings This Week": {
+      "main": [
+        [
+          {
+            "node": "Total Quotes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Total Quotes": {
+      "main": [
+        [
+          {
+            "node": "Clients By Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clients By Status": {
+      "main": [
+        [
+          {
+            "node": "Combine Metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Combine Metrics": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Client": {
+      "main": [
+        [
+          {
+            "node": "Insert Meeting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Meeting": {
+      "main": [
+        [
+          {
+            "node": "Insert Interaction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Interaction": {
+      "main": [
+        [
+          {
+            "node": "Email Client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Client": {
+      "main": [
+        [
+          {
+            "node": "Email Admin",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Admin": {
+      "main": [
+        [
+          {
+            "node": "Respond1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook1": {
+      "main": [
+        [
+          {
+            "node": "Upsert Client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Quote": {
+      "main": [
+        [
+          {
+            "node": "Upsert Client1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Quote": {
+      "main": [
+        [
+          {
+            "node": "Insert Interaction1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Quote": {
+      "main": [
+        [
+          {
+            "node": "Respond2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook2": {
+      "main": [
+        [
+          {
+            "node": "Calculate Quote",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Client1": {
+      "main": [
+        [
+          {
+            "node": "Insert Quote",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Interaction1": {
+      "main": [
+        [
+          {
+            "node": "Email Quote",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "7a672cee-b46c-4998-b820-ffb5ea023bf6",
+  "meta": {
+    "instanceId": "9bffbcf1ddac15a96f005c6bbc367809a5ed9fcf0a3846a7efc2b6c276acfc84"
+  },
+  "nodeGroups": [],
+  "id": "pboacNSXx3XwRpOh",
+  "tags": []
+}
