@@ -1,286 +1,407 @@
 # Solaris Energy CRM
 
-> A solar sales funnel and operations workspace: attract leads, estimate system
-> requirements, book consultations, and manage the resulting client pipeline
-> from one authenticated dashboard.
+**A solar lead-to-consultation funnel with an n8n automation layer, a Supabase-backed CRM, and an authenticated admin dashboard.**
 
-## Demo
+Visitors size a solar system, request a quote, and book a consultation. n8n captures every lead, calculates and emails quotes, confirms bookings, and follows up automatically. The business team then runs the whole pipeline from one dashboard.
 
 **[Watch the product demo](https://drive.google.com/file/d/1RjBTw91sWcXPC1309APvwIWgJbM79Ovt/view?usp=drive_link)**
 
-## What This Project Demonstrates
+| | |
+| --- | --- |
+| **Frontend** | Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS 4 |
+| **Automation** | n8n (webhooks, scheduled trigger, Postgres, Gmail, Code nodes) |
+| **Data and auth** | Supabase PostgreSQL, Row Level Security, Supabase Auth (`@supabase/ssr`) |
+| **Status** | Working demo of the product and integration architecture |
 
-This is a full-stack solar company experience built around a practical business
-workflow rather than a collection of disconnected screens:
+## Contents
 
-- A responsive public marketing site with services, testimonials, contact
-  capture, and solar-focused imagery.
-- A client-side solar sizing calculator that turns energy usage into estimated
-  system size, panel count, cost, savings, payback, and CO2 offset.
-- A consultation booking flow with a weekday calendar, time-slot selection,
-  contact details, and confirmation feedback.
-- An authenticated CRM dashboard for client records, meeting operations, lead
-  trends, quote totals, and recent interaction activity.
-- n8n automation agents for lead capture, quote generation, meeting booking,
-  and follow-up operations, connected through public webhook contracts.
+- [Results](#results)
+- [How it works](#how-it-works)
+- [Automation layer (n8n)](#automation-layer-n8n)
+- [Admin dashboard](#admin-dashboard)
+- [Data model and security](#data-model-and-security)
+- [Design decisions](#design-decisions)
+- [Project structure](#project-structure)
+- [Getting started](#getting-started)
+- [Known limitations and roadmap](#known-limitations-and-roadmap)
 
-The result is a realistic lead-to-operations loop: a visitor can submit an
-enquiry, request a quote, or book a consultation; the business team can then
-review the client history and update meeting outcomes from the admin portal.
+## Results
 
-## Tech Stack
+Automation results from the first week of running the n8n workflows (demo environment):
 
-| Layer | Technology | Role |
+| Metric | Result |
+| --- | --- |
+| Leads scheduled for consultations by the n8n booking automation | **16** |
+| Follow-up emails sent automatically to potential clients | **14** |
+
+Every booking and follow-up runs without manual work and is logged as an interaction, so each touchpoint is visible in the CRM.
+
+## How it works
+
+```mermaid
+flowchart LR
+  subgraph Public["Public site (Next.js)"]
+    L["Landing page and contact form"]
+    C["Solar calculator"]
+    B["Consultation booking"]
+  end
+  subgraph N8N["n8n automation"]
+    W1["Lead capture"]
+    W2["Quote generation"]
+    W3["Meeting booking"]
+    W4["Follow-up (daily, 9 AM)"]
+  end
+  DB[("Supabase Postgres and Auth")]
+  M["Gmail"]
+  A["Admin dashboard (authenticated)"]
+
+  L -->|webhook| W1
+  C -->|webhook| W2
+  B -->|webhook| W3
+  L -.->|"backup insert (anon RLS)"| DB
+  W1 --> DB
+  W2 --> DB
+  W3 --> DB
+  W4 --> DB
+  W1 --> M
+  W2 --> M
+  W3 --> M
+  W4 --> M
+  DB -->|"server-side reads"| A
+```
+
+1. **Attract:** a responsive marketing site (services, testimonials, contact form) captures leads.
+2. **Estimate:** the calculator turns monthly bill, usage, roof area, and city into system size, panel count, cost, savings, payback, and CO2 offset instantly in the browser.
+3. **Quote:** a visitor can request a detailed quote. n8n recalculates it, stores it, emails it, and returns it to the UI.
+4. **Book:** visitors pick one of the next 30 weekdays and one of eight hourly slots (09:00 to 16:00). n8n creates the meeting and emails both the client and the admin.
+5. **Nurture:** a daily n8n schedule re-engages quiet clients and deactivates the ones who never respond.
+6. **Operate:** the admin dashboard shows KPIs, lead trends, client histories, and meeting outcomes.
+
+## Automation layer (n8n)
+
+Two workflow exports live in the repo, so the automation layer is inspectable and portable:
+
+| File | n8n workflow | Contents |
 | --- | --- | --- |
-| Application | Next.js `16.3.1` App Router | Routing, layouts, server-rendered admin pages, metadata |
-| UI | React `19.2.8` + TypeScript | Typed interactive forms and components |
-| Styling | Tailwind CSS `4` + PostCSS | Responsive design system and utility styling |
-| Data and auth | Supabase PostgreSQL + Supabase Auth | CRM persistence, relational queries, password authentication |
-| Auth integration | `@supabase/ssr` | Browser, server, and middleware clients with cookie sessions |
-| Automation | n8n | Lead, quote, booking, email, and follow-up workflows |
-| Utilities | `clsx` | Conditional class composition |
-| Quality tooling | ESLint `9`, `eslint-config-next`, TypeScript | Linting and static type checking |
+| [`Workflow1.json`](Workflow1.json) | `Solar_Company_1` (29 nodes) | Quote generation, meeting booking, daily follow-up, dashboard data |
+| [`Workflow 2.json`](Workflow%202.json) | `Solar _Company_2` (6 nodes) | Lead capture |
 
-The app uses Next.js Server Components by default and opts into Client
-Components for interactive forms, calendars, filters, and tables. The root
-layout loads Geist and Geist Mono through `next/font`.
+| Automation | Trigger | What it does | Database writes | Emails |
+| --- | --- | --- | --- | --- |
+| **Lead capture** | `POST /lead-capture` | Inserts the client, logs a `form_submit` interaction | `clients`, `interactions` | Thank-you to the lead, alert to admin |
+| **Quote generation** | `POST /quote-generation` | Calculates the quote in a Code node, upserts the client by email, stores the quote, logs `quote_generated` | `clients`, `quotes`, `interactions` | Itemized quote to the visitor |
+| **Meeting booking** | `POST /meeting-booking` | Upserts the client by email, inserts the meeting as `scheduled`, logs `meeting_booked` | `clients`, `meetings`, `interactions` | Confirmation to the client, alert to admin |
+| **Follow-up** | Schedule, every day at 09:00 | Finds stale clients, emails them, logs the follow-up, deactivates after 3 | `interactions`, `clients` | "We miss you" nudge |
+| **Dashboard data** | Webhook `dashboard-data` | Runs four aggregate queries and returns JSON (not used by the app, see [Design decisions](#design-decisions)) | none | none |
 
-## Architecture
+### Webhook contracts
 
-```text
-                         +----------------------+
-                         |  Public Next.js site  |
-                         |  / /calculator /book |
-                         +----------+-----------+
-                                    |
-                    JSON webhook POSTs from client forms
-                                    |
-                                    v
-                         +----------------------+
-                         |   n8n automation     |
-                         | lead / quote / book  |
-                         | email / follow-up    |
-                         +----------+-----------+
-                                    |
-                         PostgreSQL writes + email
-                                    |
-                                    v
-                         +----------------------+
-                         | Supabase CRM tables  |
-                         | clients, meetings,   |
-                         | quotes, interactions|
-                         +----------+-----------+
-                                    ^
-                                    |
-                         Authenticated server reads
-                                    |
-                         +----------+-----------+
-                         | Admin Next.js portal |
-                         | /admin/*             |
-                         +----------------------+
+```jsonc
+// POST /lead-capture       (contact form)
+{ "name": "Jane Doe", "email": "jane@company.com", "phone": "+923001234567", "message": "..." }
+// -> { "success": true, "message": "Lead captured" }
+
+// POST /quote-generation   (calculator + quote form)
+{ "name": "...", "email": "...", "phone": "...", "monthly_bill": 45000, "usage_kwh": 600, "roof_area": 900, "city": "Lahore" }
+// -> { "success": true, "quote": { "system_size_kw", "num_panels", "estimated_cost", "monthly_savings", "payback_years" } }
+
+// POST /meeting-booking    (booking flow)
+{ "name": "...", "email": "...", "phone": "...", "date": "2026-08-24", "time": "14:00", "notes": "..." }
+// -> { "success": true, "meeting_id": "<uuid>", "message": "Meeting scheduled" }
 ```
 
-### Route structure
+### Follow-up logic
 
-```text
-app/
-├── (public)/
-│   ├── page.tsx                 Landing page and contact form
-│   ├── calculator/page.tsx      Solar sizing and quote request flow
-│   ├── book/page.tsx            Consultation booking flow
-│   └── layout.tsx               Public header/footer shell
-├── (admin)/admin/
-│   ├── page.tsx                 KPI overview, trend chart, recent activity
-│   ├── clients/page.tsx         Clients with related history
-│   ├── meetings/page.tsx        Searchable meetings and status actions
-│   ├── agents/page.tsx          Configured n8n agent directory
-│   └── layout.tsx               Authenticated sidebar and topbar shell
-├── layout.tsx                   Root metadata, fonts, and global styles
-└── globals.css                  Tailwind/theme styles
-
-components/
-├── site/                        Public marketing and contact UI
-├── calculator/                  Calculator results and quote request UI
-├── booking/                     Calendar, time slots, and booking state
-├── admin/                       CRM dashboard tables, cards, and charts
-└── ui/                          Shared buttons, fields, cards, badges, icons
-
-lib/
-├── solar-calc.ts                Pure, client-safe sizing calculations
-├── webhook.ts                   Resilient n8n webhook client
-├── types.ts                     CRM domain and joined-record types
-├── utils.ts                     Dates, time slots, formatting, class helpers
-├── actions/meetings.ts          Authenticated meeting status Server Action
-└── supabase/                    Browser, server, middleware, and admin clients
+```mermaid
+flowchart TD
+  A["Schedule trigger: every day at 9 AM"] --> B["Get stale clients: active, no interaction in the last 3 days"]
+  B --> C{"Loop over clients"}
+  C --> D["Send follow-up email"]
+  D --> E["Log follow_up interaction"]
+  E --> F["Count follow-ups for the client"]
+  F --> G{"3 or more?"}
+  G -->|yes| H["Set client status to inactive"]
+  G -->|no| C
+  H --> C
 ```
 
-## Core Workflows
+Because each follow-up is logged as an interaction, a client is only "stale" again after another 3 quiet days. After the third follow-up the client is set to `inactive`, which keeps the daily run from emailing people forever.
 
-### 1. Lead capture
+### Booking flow
 
-The landing page contact form posts a typed JSON payload to the configured n8n
-Lead Capture webhook. It also writes a client and `form_submit` interaction
-through the anonymous Supabase client as a persistence fallback. The webhook
-client deliberately fails soft when n8n is not configured, allowing the public
-site to remain usable in a local/demo environment.
+```mermaid
+sequenceDiagram
+  actor V as Visitor
+  participant W as Next.js booking flow
+  participant N as n8n Meeting Booking
+  participant DB as Supabase Postgres
+  participant G as Gmail
 
-### 2. Solar calculation and quote generation
-
-The calculator accepts monthly bill, monthly usage, roof area, and a Pakistan
-city. Results are calculated immediately in the browser using the constants in
-`lib/solar-calc.ts`:
-
-```text
-system size kW = monthly kWh / (30 * 4.5 peak sun hours)
-panel count    = ceil(system size kW / 0.55 kW per panel)
-estimated cost = system size kW * PKR 170,000
-monthly saving = monthly bill * 0.85
-payback years  = estimated cost / (monthly saving * 12)
+  V->>W: Pick weekday, time slot, and enter details
+  W->>N: POST /meeting-booking
+  N->>DB: Upsert client by email
+  N->>DB: Insert meeting (scheduled) and interaction (meeting_booked)
+  N->>G: Confirmation email to client
+  N->>G: Notification email to admin
+  N-->>W: success and meeting_id
+  W-->>V: You're booked
 ```
 
-The visitor can then submit contact details to the Quote Generation webhook.
-n8n calculates and persists the quote, sends email notifications, and returns
-the detailed quote for display. The UI renders system size, panel count,
-estimated cost, monthly savings, and payback period from that response.
+### Quote math
 
-### 3. Consultation booking
+The calculator (`lib/solar-calc.ts`) and the n8n `Calculate Quote` node use the same model, so the instant estimate and the emailed quote agree:
 
-The booking UI exposes the next 30 weekdays and eight one-hour slots from 09:00
-through 16:00. After the visitor selects a slot, the Meeting Booking webhook
-receives the contact details, ISO date, time, and optional notes. n8n owns this
-workflow end to end: it upserts the client, inserts the meeting and interaction,
-and emails the client and admin. This avoids duplicate client records between
-the browser fallback and the automation workflow.
+```text
+system size (kW) = monthly kWh / (30 days x 4.5 peak sun hours)
+panel count      = ceil(system size / 0.55 kW per panel)
+estimated cost   = system size x PKR 170,000 per kW
+monthly savings  = monthly bill x 0.85
+payback (years)  = estimated cost / (monthly savings x 12)
+CO2 offset       = system size x 4.5 x 365 x 0.65 kg / 1000   (tons per year, browser only)
+```
 
-### 4. CRM operations
+## Admin dashboard
 
-Authenticated server-rendered pages query Supabase directly rather than waiting
-on a slower dashboard webhook:
+An authenticated, server-rendered dashboard at `/admin`. Every page reads Supabase directly through the signed-in user's session.
 
-- **Overview:** total clients, active/inactive counts, meetings this week,
-  quote totals, period-over-period trends, six-month lead chart, and recent
-  interactions.
-- **Clients:** relational client rows with meetings, interactions, and quotes;
-  rows expand into client history.
-- **Meetings:** search by name/email, filter by status, and update meetings to
-  `completed`, `no_show`, or `cancelled` through an authenticated Server Action.
-- **Agents:** four configured automation roles with availability and recent
-  trigger information derived from interactions. When an n8n base URL and
-  workflow ID are configured, the card links to the workflow editor.
+| Page | What it shows |
+| --- | --- |
+| **Overview** | Four KPI cards (total clients, meetings this week, active clients with inactive count, quotes generated) with period-over-period trends: clients and quotes month over month, meetings week over week. A six-month lead trend chart and the six most recent interactions. |
+| **Clients** | Searchable, status-filterable table sortable by name, status, or created date. Clicking a row expands the client's meetings, interactions, and quotes. |
+| **Meetings** | Search by name or email, filter by status, and update a meeting to `completed`, `no_show`, or `cancelled` through an authenticated Server Action that revalidates the affected pages. |
+| **Agents** | One card per automation (Lead Capture, Quote Generator, Meeting Booker, Follow-up) with the time it last triggered, derived from `interactions`. When configured, each card links to the workflow in the n8n editor. |
 
-The repository includes two n8n JSON exports (`Workflow 2.json` and
-`Workflow1.json`) containing webhook, PostgreSQL, Gmail, schedule, branching,
-and code nodes for the automation layer. n8n activation and workflow editing
-remain in n8n itself; the app does not pretend to provide an n8n REST control
-plane on a free-trial instance.
+The UI also includes loading skeletons (overview, clients, meetings), empty states, inline error states, and a responsive layout. `/admin` itself renders the login form when there is no session, while nested admin routes redirect to it.
 
-## Data Model and Security
+## Data model and security
 
-The Supabase CRM model contains four related tables:
+```mermaid
+erDiagram
+  clients ||--o{ meetings : books
+  clients ||--o{ quotes : receives
+  clients ||--o{ interactions : logs
 
-- `clients`: identity, source, lifecycle status, and creation time.
-- `meetings`: client relationship, date/time, notes, and appointment status.
-- `quotes`: usage/bill inputs and generated financial/system estimates.
-- `interactions`: activity records such as form submissions, quote generation,
-  booked meetings, emails, and follow-ups.
+  clients {
+    uuid id PK
+    text name
+    text email
+    text phone
+    text source "contact_form | calculator | meeting_booking"
+    text status "active | inactive | converted"
+    timestamptz created_at
+  }
+  meetings {
+    uuid id PK
+    uuid client_id FK
+    date date
+    text time
+    text status "scheduled | completed | no_show | cancelled"
+    text notes
+  }
+  quotes {
+    uuid id PK
+    uuid client_id FK
+    numeric monthly_bill
+    numeric system_size_kw
+    int num_panels
+    numeric estimated_cost
+    numeric monthly_savings
+    numeric payback_years
+  }
+  interactions {
+    uuid id PK
+    uuid client_id FK
+    text type "form_submit | quote_generated | meeting_booked | email_sent | follow_up"
+    jsonb details
+    timestamptz created_at
+  }
+```
 
-Row Level Security is documented in [`supabase/policies.sql`](supabase/policies.sql):
+### Row Level Security
 
-- `anon` may insert into `clients`, `meetings`, and `interactions`, but cannot
-  read or modify CRM data. This supports public-form fallback writes without
-  exposing client PII.
-- `authenticated` users have full CRM table access for the admin portal.
-- `quotes` are intentionally not writable by anonymous visitors; quote creation
-  is owned by n8n.
+Policies live in [`supabase/policies.sql`](supabase/policies.sql) so they are version controlled and reproducible.
 
-Supabase sessions are refreshed in `middleware.ts`. Requests under `/admin/*`
-redirect unauthenticated users to the login screen, while the admin layout
-renders the sidebar and topbar only after `getAuthUser()` succeeds. The service
-role client exists in `lib/supabase/admin.ts` for server-only privileged work;
-its secret must never be exposed to a Client Component.
+| Role | `clients` | `meetings` | `interactions` | `quotes` |
+| --- | --- | --- | --- | --- |
+| `anon` (public visitors) | insert only | insert only | insert only | no access |
+| `authenticated` (admin) | full access | full access | full access | full access |
 
-## Local Setup
+- Anonymous visitors can never read client data, so no PII is exposed.
+- Quotes are not writable by visitors. Quote creation belongs to n8n.
+- `/admin/*` sub-routes are protected in `middleware.ts`, which also refreshes the Supabase session cookie on every request. Unauthenticated requests are redirected to the login screen.
+- The meeting status Server Action re-checks authentication before it mutates anything.
+- The service-role client is isolated in `lib/supabase/admin.ts` behind `server-only`, so it cannot be imported into a Client Component.
+
+## Design decisions
+
+| Decision | Reasoning |
+| --- | --- |
+| **Dashboard reads Supabase directly instead of the n8n `dashboard-data` webhook** | The webhook only re-reads the same tables and consistently took about 7 to 8 seconds. Direct server-side reads are much faster and need no extra secrets in the browser. |
+| **n8n owns the whole booking write path** | A direct browser insert next to n8n's upsert would risk duplicate client records, so the booking form only calls the webhook. |
+| **Client-generated UUIDs for the contact form backup insert** | `INSERT ... RETURNING` needs a SELECT policy, which anonymous users intentionally do not have. The app generates the id with `crypto.randomUUID()` instead of reading it back. |
+| **Fail-soft webhook client (`lib/webhook.ts`)** | `postToWebhook` never throws into the UI. It returns `{ ok, data }`, treats an explicit `success: false` as failure even on HTTP 200, and lets the site run in local or demo environments before n8n is wired up. |
+| **Contact form writes to both n8n and Supabase** | The lead is never lost if the workflow is down. |
+| **No n8n REST control plane** | The n8n API needs a paid plan. The Agents page links out to the editor and leaves activation to n8n itself. |
+| **RLS policies documented in SQL** | Tables with RLS enabled and zero policies deny everything. Public inserts fail with a 401, and admin reads silently return empty results because RLS filters SELECT rows instead of raising an error. The policy file makes that failure mode reproducible. |
+| **Typed domain model (`lib/types.ts`)** | Enums mirror the database `check` constraints, and joined shapes (`ClientWithRelations`, `MeetingWithClient`) keep the admin pages type-safe. |
+
+## Project structure
+
+```text
+.
+├── app/
+│   ├── (public)/                 Landing page (page.tsx), calculator/, book/
+│   ├── (admin)/admin/            Overview (page.tsx), clients/, meetings/, agents/, with loading states
+│   ├── layout.tsx                Root layout and metadata
+│   ├── globals.css               Tailwind and theme styles
+│   └── favicon.ico
+├── components/
+│   ├── site/                     Header, Footer, Logo, ContactForm
+│   ├── calculator/               CalculatorForm, QuoteRequestForm, StatCard
+│   ├── booking/                  BookingFlow, Calendar, TimeSlotGrid
+│   ├── admin/                    Sidebar, Topbar, StatCard, LeadTrendChart, RecentActivity,
+│   │                             ClientsTable, MeetingsTable, AgentCard, LoginForm, Skeleton
+│   └── ui/                       Button, Card, Badge, Field, Container, IconTile, icons
+├── lib/
+│   ├── solar-calc.ts             Pure sizing and cost calculations
+│   ├── webhook.ts                Fail-soft n8n webhook client
+│   ├── n8n.ts                    Workflow editor link helpers (server-only)
+│   ├── types.ts                  CRM domain types
+│   ├── utils.ts                  Dates, time slots, formatting, class helpers
+│   ├── actions/meetings.ts       Authenticated Server Action
+│   └── supabase/                 client.ts, server.ts, middleware.ts, admin.ts, auth.ts
+├── public/images/                residential-install.jpg, rooftop-sunset.jpg, solar-field.jpg
+├── supabase/policies.sql         Row Level Security policies
+├── Workflow1.json                n8n: quote, booking, follow-up, dashboard data
+├── Workflow 2.json               n8n: lead capture
+├── middleware.ts                 Session refresh and /admin protection
+├── .env.example                  Environment variable template
+├── package.json                  Scripts and dependencies
+├── next.config.ts, tsconfig.json, eslint.config.mjs, postcss.config.mjs
+├── AGENTS.md, CLAUDE.md          Instructions for AI coding assistants
+└── README.md
+```
+
+## Getting started
 
 ### Prerequisites
 
 - Node.js compatible with the Next.js 16 toolchain
-- A Supabase project with the CRM tables and Auth enabled
-- Optional: an n8n instance with the exported workflows imported and active
+- A Supabase project (PostgreSQL and Auth)
+- An n8n instance with a Postgres credential (your Supabase connection) and a Gmail credential
 
-### Install and run
+### 1. Install and configure
 
 ```bash
+git clone https://github.com/MUnssRahim/SolarCompany-CRM-n8n-Automation.git
+cd SolarCompany-CRM-n8n-Automation
 npm install
 cp .env.example .env.local
-npm run dev
 ```
-
-Open `http://localhost:3000`. The available scripts are:
-
-```bash
-npm run dev       # Start the Next.js development server
-npm run lint      # Run ESLint
-npm run build     # Create a production build
-npm run start     # Serve the production build
-```
-
-### Environment variables
-
-Set these in `.env.local`:
 
 | Variable | Purpose |
 | --- | --- |
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Browser/server session-scoped Supabase access |
-| `SUPABASE_SERVICE_ROLE_KEY` | Server-only privileged Supabase client |
-| `NEXT_PUBLIC_N8N_LEAD_WEBHOOK` | Landing contact form webhook |
-| `NEXT_PUBLIC_N8N_QUOTE_WEBHOOK` | Detailed quote webhook |
-| `NEXT_PUBLIC_N8N_MEETING_WEBHOOK` | Consultation booking webhook |
-| `NEXT_PUBLIC_N8N_DASHBOARD_WEBHOOK` | Reserved contract; dashboard currently queries Supabase directly |
-| `N8N_BASE_URL` | Base URL used to link Agents cards to n8n |
-| `N8N_WORKFLOW_ID_LEAD_CAPTURE` | Lead Capture editor link |
-| `N8N_WORKFLOW_ID_QUOTE_GENERATION` | Quote Generation editor link |
-| `N8N_WORKFLOW_ID_MEETING_BOOKING` | Meeting Booking editor link |
-| `N8N_WORKFLOW_ID_FOLLOW_UP` | Follow-up editor link |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Session-scoped browser and server access |
+| `SUPABASE_SERVICE_ROLE_KEY` | Server-only privileged client, never expose it to the browser |
+| `NEXT_PUBLIC_N8N_LEAD_WEBHOOK` | Lead capture production webhook URL |
+| `NEXT_PUBLIC_N8N_QUOTE_WEBHOOK` | Quote generation production webhook URL |
+| `NEXT_PUBLIC_N8N_MEETING_WEBHOOK` | Meeting booking production webhook URL |
+| `NEXT_PUBLIC_N8N_DASHBOARD_WEBHOOK` | Reserved. The dashboard reads Supabase directly |
+| `N8N_BASE_URL` | Used only to build "View workflow in n8n" links |
+| `N8N_WORKFLOW_ID_LEAD_CAPTURE` / `_QUOTE_GENERATION` / `_MEETING_BOOKING` / `_FOLLOW_UP` | Workflow IDs for the Agents page links |
+| `N8N_API_KEY` | Unused (the n8n REST API needs a paid plan) |
 
-`N8N_API_KEY` is retained in `.env.example` for deployment parity, but the
-current app does not call the n8n REST API. Placeholder workflow values are
-treated as unconfigured, so the Agents page shows a graceful unavailable state.
+### 2. Set up Supabase
 
-### Supabase initialization
+1. Create the four tables (`clients`, `meetings`, `quotes`, `interactions`). A reference schema is below.
+2. Apply [`supabase/policies.sql`](supabase/policies.sql).
+3. In **Authentication**, create the first admin user with email and password and auto-confirm enabled.
 
-For a fresh project, apply [`supabase/policies.sql`](supabase/policies.sql)
-after creating the `clients`, `meetings`, `interactions`, and `quotes` tables.
-The types in [`lib/types.ts`](lib/types.ts) document the expected enum-like
-values and joined shapes used by the pages. Create the first admin user in
-Supabase Authentication with email/password and auto-confirm enabled, then use
-that account at `/admin`.
+<details>
+<summary>Reference schema (reconstructed from the app types and workflow queries)</summary>
 
-## Engineering Highlights
+```sql
+create table public.clients (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  email text not null,
+  phone text,
+  source text not null default 'contact_form'
+    check (source in ('contact_form', 'calculator', 'meeting_booking')),
+  status text not null default 'active'
+    check (status in ('active', 'inactive', 'converted')),
+  created_at timestamptz not null default now()
+);
 
-- **Clear integration boundaries:** public forms know only their webhook
-  payloads; server-rendered admin pages own CRM reads; the meeting Server Action
-  owns authenticated status mutation.
-- **Graceful degradation:** `postToWebhook` never throws into the UI when an
-  endpoint is missing, unavailable, or returns an explicit failure response.
-- **RLS-first data access:** anonymous writes are narrowly scoped, while admin
-  reads use the authenticated Supabase session rather than shipping secrets to
-  the browser.
-- **Typed relational UI:** domain types model client relations, meeting status,
-  interaction types, and quote results instead of passing unstructured data
-  through every component.
-- **Responsive operational UX:** loading skeletons, searchable tables, status
-  filters, transition states, empty states, and inline error states support
-  repeated admin use.
-- **Reproducible automation:** n8n exports live in the repository alongside
-  the application, making the external workflow layer inspectable and
-  portable.
+create table public.meetings (
+  id uuid primary key default gen_random_uuid(),
+  client_id uuid not null references public.clients(id) on delete cascade,
+  date date not null,
+  time text not null,
+  status text not null default 'scheduled'
+    check (status in ('scheduled', 'completed', 'no_show', 'cancelled')),
+  notes text,
+  created_at timestamptz not null default now()
+);
 
-## Project Status
+create table public.quotes (
+  id uuid primary key default gen_random_uuid(),
+  client_id uuid not null references public.clients(id) on delete cascade,
+  monthly_bill numeric,
+  system_size_kw numeric,
+  num_panels integer,
+  estimated_cost numeric,
+  monthly_savings numeric,
+  payback_years numeric,
+  created_at timestamptz not null default now()
+);
 
-This repository is a working demo of the product and integration architecture.
-The public funnel, Supabase-backed CRM views, authentication flow, calculator,
-booking experience, and n8n contracts are implemented. Production hardening
-would naturally include server-side webhook mediation or signature validation,
-real availability checks against calendar data, automated tests, and more
-granular per-user authorization than the current single-admin RLS model.
+create table public.interactions (
+  id uuid primary key default gen_random_uuid(),
+  client_id uuid references public.clients(id) on delete cascade,
+  type text not null
+    check (type in ('form_submit', 'quote_generated', 'meeting_booked', 'email_sent', 'follow_up')),
+  details jsonb,
+  created_at timestamptz not null default now()
+);
+
+alter table public.clients enable row level security;
+alter table public.meetings enable row level security;
+alter table public.quotes enable row level security;
+alter table public.interactions enable row level security;
+```
+
+</details>
+
+### 3. Import the n8n workflows
+
+1. In n8n, import `Workflow1.json` and `Workflow 2.json`.
+2. Attach your **Postgres** (Supabase) and **Gmail** credentials to the Postgres and Gmail nodes.
+3. Replace the placeholder admin address in the `Email Admin` nodes.
+4. **Activate** both workflows and copy each **production** webhook URL (`/webhook/...`, not `/webhook-test/...`) into `.env.local`.
+
+### 4. Run
+
+```bash
+npm run dev       # http://localhost:3000
+npm run lint      # ESLint
+npm run build     # production build
+npm run start     # serve the production build
+```
+
+Public site: `/`, `/calculator`, `/book`. Admin: `/admin` (sign in with the user you created).
+
+## Known limitations and roadmap
+
+This repository is a working demo of the product and integration architecture. Production hardening would add:
+
+- Server-side webhook mediation or signature validation, plus rate limiting, instead of public webhook URLs in `NEXT_PUBLIC_*` variables.
+- Real availability checks against calendar data (today all eight slots are always offered) and calendar invites.
+- Client deduplication by email on the contact form path, where the n8n insert and the Supabase backup insert can create two client rows.
+- Automated tests for the calculator, the webhook client, and the Server Action.
+- Per-user authorization and roles instead of the single-admin RLS model.
+
+---
+
+Built by [Muhammad Unss Rahim](https://github.com/MUnssRahim).
