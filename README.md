@@ -4,7 +4,7 @@
 
 Visitors size a solar system, request a quote, and book a consultation. n8n captures every lead, calculates and emails quotes, confirms bookings, and follows up automatically. The business team then runs the whole pipeline from one dashboard.
 
-**[Watch the product demo](https://drive.google.com/file/d/1RjBTw91sWcXPC1309APvwIWgJbM79Ovt/view?usp=drive_link)**
+**[Watch the product demo](https://youtu.be/KvBplrA9QAg)**
 
 | | |
 | --- | --- |
